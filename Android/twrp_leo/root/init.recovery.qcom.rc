@@ -1,0 +1,26 @@
+on boot
+    insmod /sbin/core_ctl.ko
+    insmod /sbin/ecryptfs.ko
+    insmod /sbin/kscl.ko
+    insmod /sbin/mhl_sii8620_8061_drv.ko
+    insmod /sbin/texfat.ko
+
+    write /sys/class/android_usb/android0/idVendor 0FCE
+    write /sys/class/android_usb/android0/idProduct 51D9
+
+    # Configure governor settings for little cluster
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "interactive"
+
+    # Configure governor settings for big cluster
+    write /sys/devices/system/cpu/cpu4/cpufreq/scaling_governor "interactive"
+    write /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq 1248000
+    
+    # for USB HOST
+    chown system system /sys/module/qpnp_smbcharger_extension/parameters/id_polling_timeout
+    chown system system /sys/module/qpnp_smbcharger_extension/parameters/start_id_polling
+    chmod 0660 /sys/module/qpnp_smbcharger_extension/parameters/id_polling_timeout
+    chmod 0660 /sys/module/qpnp_smbcharger_extension/parameters/start_id_polling
+
+    write /sys/module/qpnp_smbcharger_extension/parameters/id_polling_timeout 30000
+    write /sys/module/qpnp_smbcharger_extension/parameters/start_id_polling 1
+

@@ -1,0 +1,14 @@
+# mount point    fstype    device            
+
+/boot            emmc      /dev/block/bootdevice/by-name/boot             flags=backup=1;display="Boot "Kernel""
+/FOTAKernel      emmc      /dev/block/bootdevice/by-name/FOTAKernel       flags=backup=1;display="FOTAKernel"
+/ta              emmc      /dev/block/bootdevice/by-name/TA               flags=backup=1;display="TA "Trim-Area""
+/system          ext4      /dev/block/bootdevice/by-name/system    
+/data            ext4      /dev/block/bootdevice/by-name/userdata         length=-16384;retainlayoutversion
+/cache           ext4      /dev/block/bootdevice/by-name/cache   
+/external_sd     vfat      /dev/block/mmcblk1p1                           flags=display="Micro SDcard";storage;wipeingui;removable
+/usb-otg         vfat      /dev/block/sda1                                flags=display="USB OTG";storage;wipeingui;removable
+/appslog         ext4      /dev/block/bootdevice/by-name/apps_log         flags=display="AppsLog";backup=1;usermrf
+/lta-label       ext4      /dev/block/bootdevice/by-name/LTALabel         flags=display="LTALabel";backup=1;
+/modemst1        emmc      /dev/block/bootdevice/by-name/modemst1         flags=display="modemst1 "Baseband"";backup=1;
+/modemst2        emmc      /dev/block/bootdevice/by-name/modemst2         flags=display="modemst2 "Baseband"";backup=1;
