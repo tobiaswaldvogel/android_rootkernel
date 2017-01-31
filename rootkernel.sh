@@ -1,5 +1,5 @@
 #!/bin/sh
-VERSION=V5.1
+VERSION=V5.11
 SOURCE=$1
 TARGET=$2
 
@@ -417,6 +417,7 @@ add_vendor_overlay() {
 		perform mkdir $RAMDISK/$VENDOR_OVL/lib64
 		perform mkdir $RAMDISK/$VENDOR_OVL/lib64/bind_lib64
 	}
+	perform echo -n >$RAMDISK/$VENDOR_OVL/etc__lnk__ /system/vendor/etc
 	perform mkdir $RAMDISK/$VENDOR_OVL/bin
 	perform cp -a $TOOLS/busybox $RAMDISK/$VENDOR_OVL/bin/busybox@0755
 	perform cp -a $TOOLS/init.vendor_ovl.sh $RAMDISK/init.vendor_ovl.sh@0750
@@ -809,28 +810,24 @@ fi
 
 unpack_kernel
 
-if [ -z "$VENDOR" ]; then
+[ -z "$VENDOR" ] && {
 	ui_print "- Could not determine device"
 	ui_print "Abort"
 	exit 2
-fi
+}
 
 unpack_initfs
 detect_platform
 detect_android
 disable_dmverity
 
-if [ "$VENDOR" == "somc" ]; then
-	disable_sonyric
-fi
+[ "$VENDOR" == "somc" ] && disable_sonyric
 
 add_twrp
 add_supersu
 add_xposed
 
-if [ "$VENDOR" == "somc" ]; then
-	add_drmfix
-fi
+[ "$VENDOR" == "somc" ] && add_drmfix
 
 add_bb
 
