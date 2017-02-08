@@ -1,9 +1,10 @@
-﻿################################################################################
-# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
-################################################################################
-
-/install/lib/modules
-/SuperSU-v2.79-201612051815.zip
-/xposed-v86-sdk23-arm.zip
-/xposed-v86-sdk23-arm64.zip
+﻿
+/install*
+/SuperSU*
+/superuser*
+/xposed*
 /boot.img
+/ramdisk*
+/newrd.gz
+/rd.gz
+/kernel

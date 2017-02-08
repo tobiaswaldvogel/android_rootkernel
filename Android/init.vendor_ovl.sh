@@ -11,24 +11,29 @@ unpack() {
 
 replicate_dir() {
 	for path in $1/*; do
+		[ ! -e ${path} ] && continue
 		local node=${path##*/}
-		[ -d $path ] && {
-			local target=$1/$node
-			[ ! -e $2/$node ] && ${BB} mkdir -m 0755 -p $2/$node
-			[ "$node" == "lib64" ] && target=$2/$node/bind_$node
-			[ "$node" == "lib" ] && target=$2/$node/bind_$node
-			replicate_dir $target $2/$node $3 $4
-		} || {
-			[ -L $path ] && {
-				local link=$(${BB} readlink $path)
-				[ "${link}" != "${link##$3}" ] && link=$4${link##$3}
-				[ ! -e $2/$node ] && ${BB} ln -s $link $2/$node
-			} || {
-				[ -e $path ] && {
-					[ ! -e $2/$node ] && ${BB} ln -s $path $2/$node
-				}
-			}
-		}
+		local subdir
+
+		if [ ! -e $2/${node} ]; then
+			if [ -d ${path} ]; then
+				subdir=${path}
+				${BB} mkdir -m 0755 -p $2/${node}
+			else
+				local target=${path}
+
+				if [ -L ${path} ]; then
+					target=$(${BB} readlink ${path})
+					[ "${target}" != "${target##$3}" ] && target=$4${target##$3}
+				fi
+				${BB} ln -s ${target} $2/${node}
+			fi
+		fi
+
+		if [ ! -z ${subdir} ]; then
+			[ -d $2/${node}/bind_${node} ] && subdir=$2/${node}/bind_${node}
+			replicate_dir ${subdir} $2/${node} $3 $4
+		fi
 	done
 }
 

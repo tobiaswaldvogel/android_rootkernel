@@ -1,10 +1,11 @@
 #!/bin/sh
-VERSION=V5.11
+VERSION=V5.20
 SOURCE=$1
 TARGET=$2
 
 TOOLS=Android
 SUPERSU_DIR=supersu
+SUPERUSER_DIR=superuser
 RAMDISK=ramdisk
 VENDOR_OVL=vendor
 LIB=${RAMDISK}/lib
@@ -60,12 +61,24 @@ ui_print() {
 	perform echo -n -e "$1\n"
 }
 
-add_policy() {
-	"$BOOTIMG" seinject -q -s $2 -t $3 -c $4 -p $5 -P $1 -o $1
+se_allow() {
+	"$BOOTIMG" seinject -s $2 -t $3 -c $4 -p $5 -P $1 -o $1
 }
 
-make_permissive() {
-	"$BOOTIMG" seinject -q -Z $2 -P $1 -o $1
+se_trans() {
+	"$BOOTIMG" seinject -s $2 -t $5 -c $4 -f $3 -P $1 -o $1
+}
+
+se_add_type() {
+	"$BOOTIMG" seinject -z $2 -P $1 -o $1
+}
+
+se_permissive() {
+	"$BOOTIMG" seinject -Z $2 -P $1 -o $1
+}
+
+se_add_attr() {
+	"$BOOTIMG" seinject -s $2 -a $3 -P $1 -o $1
 }
 
 find_file() {
@@ -342,6 +355,8 @@ disable_dmverity() {
 }
 
 disable_sonyric() {
+	RIC_DISABLED=1
+
 	local disable=0
 	local rcfile=$(find_file $RAMDISK/init.sony-platform.rc)
 	local ric=$(perform awk -v out="$rcfile.tmp" '{
@@ -366,34 +381,36 @@ disable_sonyric() {
 		ui_print "  Disabling Sony RIC"
 		perform mv $rcfile.tmp $rcfile
 		local policy=$(find_file $RAMDISK/sepolicy)
-		add_policy $policy init securityfs file write  
+		se_allow ${policy} init securityfs file write  
 	else
 		perform rm $rcfile.tmp
 	fi
 }
 
 add_file_context() {
+	local wildcard=""
 	local contexts=$(find_file $RAMDISK/file_contexts)
 	[ ! -z "$conexts" ] && {
 		perform grep -q -F "$1" $contexts
 		[ $? -eq 0 ] && return
 
-		perform echo -e >>$contexts ""
-		perform echo -e >>$contexts "##########################"
-		perform echo -e >>$contexts "#$3"
-		perform echo -e >>$contexts "$1(/.*)?\t\tu:object_r:$2:s0"
+		[ !-z $3 ] && wildcard="(/.*)?"
+		perform echo -e >>${contexts} ""
+		perform echo -e >>${contexts} "##########################"
+		perform echo -e >>${contexts} "$1${wildcard}\t\tu:object_r:$2:s0"
 	} || {
 		contexts=$(find_file $RAMDISK/file_contexts.bin)
-		$BOOTIMG fctxinject -q -i $contexts -c u:object_r:$2:s0 -p $1 -o $contexts
+		[ ! -z $3 ] && wildcard=-w
+		$BOOTIMG fctxinject -q -i ${contexts} ${wildcard} -c u:object_r:$2:s0 -p $1 -o $contexts
 	}
 
 	local policy=$(find_file $RAMDISK/sepolicy)
-	add_policy $policy init rootfs dir      relabelfrom
-	add_policy $policy init rootfs file     relabelfrom
-	add_policy $policy init rootfs lnk_file relabelfrom
-	add_policy $policy init $2     dir      relabelto
-	add_policy $policy init $2     file     relabelto
-	add_policy $policy init $2     lnk_file relabelto
+	se_allow ${policy} init rootfs dir      relabelfrom
+	se_allow ${policy} init rootfs file     relabelfrom
+	se_allow ${policy} init rootfs lnk_file relabelfrom
+	se_allow ${policy} init $2     dir      relabelto
+	se_allow ${policy} init $2     file     relabelto
+	se_allow ${policy} init $2     lnk_file relabelto
 }
 
 # Since android 7 the linker is enforcing that libraries must be under the paths
@@ -406,7 +423,7 @@ add_vendor_overlay() {
 	perform grep -q -F "init.vendor_ovl.sh" $initrc
 	[ $? -eq 0 ] && return
 	
-	add_file_context "/$VENDOR_OVL" "system_file" "/vendor overlay"
+	add_file_context "/$VENDOR_OVL" "system_file" 1
 
 	local vendor=$(find_file $RAMDISK/vendor)
 	[ ! -z $vendor ] && perform rm $vendor
@@ -429,21 +446,21 @@ add_vendor_overlay() {
 	perform echo -e >>$initrc "    write /sys/kernel/security/sony_ric/enable 0"
 	perform echo -e >>$initrc "    mount none /system/vendor/lib /$VENDOR_OVL/lib/bind_lib bind"
 	[ $PLATFORM -eq 64 ] && perform echo -e >>$initrc "    mount none /system/vendor/lib64 /$VENDOR_OVL/lib64/bind_lib64 bind"
-	perform echo -e >>$initrc "    write /sys/kernel/security/sony_ric/enable 1"
+	[ -z "$RIC_DISABLED" ] && perform echo -e >>$initrc "    write /sys/kernel/security/sony_ric/enable 1"
 	perform echo -e >>$initrc "    exec u:r:init:s0 -- /system/bin/sh /init.vendor_ovl.sh /$VENDOR_OVL"
 	perform echo -e >>$initrc "    restorecon_recursive /$VENDOR_OVL"
 
 	perform sed -i -e "s!\(.*\)\(trigger post-fs\)\$!\1trigger vendor-ovl\n\1\2!" $initrc
 
 	local policy=$(find_file $RAMDISK/sepolicy)
-	add_policy $policy init		shell_exec	file		execute_no_trans
-	add_policy $policy init		rootfs		file		create,write,setattr,unlink,execute_no_trans
-	add_policy $policy init		rootfs		dir			create,write,setattr,add_name,remove_name,rmdir
-	add_policy $policy init		rootfs		lnk_file	create,write,setattr,unlink,rename
-	add_policy $policy toolbox	toolbox		capability	sys_module
-	add_policy $policy init		system_file	dir			setattr
-	add_policy $policy init		securityfs	dir			mounton
-	add_policy $policy init		securityfs	file		write
+	se_allow ${policy} init		shell_exec	file		execute_no_trans
+	se_allow ${policy} init		rootfs		file		create,write,setattr,unlink,execute_no_trans
+	se_allow ${policy} init		rootfs		dir			create,write,setattr,add_name,remove_name,rmdir
+	se_allow ${policy} init		rootfs		lnk_file	create,write,setattr,unlink,rename
+	se_allow ${policy} toolbox	toolbox		capability	sys_module
+	se_allow ${policy} init		system_file	dir			setattr
+	se_allow ${policy} init		securityfs	dir			mounton
+	se_allow ${policy} init		securityfs	file		write
 }
 
 add_preload() {
@@ -577,6 +594,8 @@ add_supersu()
 	ask "- Found $SUPERSU. Install?" 1 preinstall
 	[ $preinstall -ne 1 ] && return
 
+	SUPER_INSTALLED=1
+	
 	add_vendor_overlay
 
 	perform rm -rf $SUPERSU_DIR
@@ -604,12 +623,15 @@ add_supersu()
 #		Without assets SuperSU also does not perform a check of the binaries
 #		and 2.65 stable works as well
 #		As the signature is on file level, removing files does not break the package signature
-		ui_print "  Stripping SuperSU app"
-		perform mkdir -p $SUPERSU_DIR/apktmp
-		unzip_with_timestamp $file $SUPERSU_DIR/apktmp
-		perform rm -rf $SUPERSU_DIR/apktmp/assets
-		perform rm $file
-		$BOOTIMG zip -i $SUPERSU_DIR/apktmp -o $file
+#		in Android 6
+		if [ "${VERSION%%.*}" -eq "6" ]; then
+			ui_print "  Stripping SuperSU app"
+			perform mkdir -p $SUPERSU_DIR/apktmp
+			unzip_with_timestamp $file $SUPERSU_DIR/apktmp
+			perform rm -rf $SUPERSU_DIR/apktmp/assets
+			perform rm $file
+			$BOOTIMG zip -i $SUPERSU_DIR/apktmp -o $file
+		fi
 
 		perform mkdir -p $RAMDISK/$VENDOR_OVL/app/SuperSU
 		perform cp -a $file $RAMDISK/$VENDOR_OVL/app/SuperSU/SuperSU.apk
@@ -630,13 +652,287 @@ add_supersu()
 	perform rm -rf $SUPERSU_DIR
 
 	local policy=$(find_file $RAMDISK/sepolicy)
-	add_policy $policy init		logd		dir     	search
-	add_policy $policy init		logd		file   	 	read,open
-	add_policy $policy init		system_file	file		execute_no_trans
-	add_policy $policy init		kernel		security	read_policy,load_policy
+	se_allow ${policy} init		logd		dir     	search
+	se_allow ${policy} init		logd		file   	 	read,open
+	se_allow ${policy} init		system_file	file		execute_no_trans
+	se_allow ${policy} init		kernel		security	read_policy,load_policy
 	
 #	For copying app_process to /vendor/bin
-	add_policy $policy toolbox	zygote_exec	file		read,open
+	se_allow ${policy} toolbox	zygote_exec	file		read,open
+}
+
+add_superuser()
+{
+	local file
+	local SUPERUSER
+	local preinstall
+	
+	for file in superuser*.zip; do SUPERUSER=$file; done
+	[ ! -f $SUPERUSER ] && return
+
+	if [ "${VERSION%%.*}" -lt "6" ]; then
+		ui_print "  Skipping superuser integration. Only supported for Android 6+"
+		return
+	fi
+
+	ask "- Found $SUPERUSER. Install?" 1 preinstall
+	[ $preinstall -ne 1 ] && return
+
+	ask "# Make su permissive (Permits any action as su)?" 1 su_permissive
+
+	add_vendor_overlay
+
+	perform rm -rf $SUPERUSER_DIR
+	perform mkdir -p $SUPERUSER_DIR
+	unzip_with_timestamp $SUPERUSER $SUPERUSER_DIR
+
+	perform cp -a $SUPERUSER_DIR/scripts/bin/su-arm $RAMDISK/$VENDOR_OVL/bin/su@0755
+
+	local initrc=$(find_file $RAMDISK/init.rc)
+	perform grep -q '^service su_daemon' $initrc
+	if [ $? -ne 0 ]; then
+		ui_print "  Adding service entry for superuser"
+		perform echo >>$initrc ""
+		perform echo >>$initrc "# launch su daemon"
+		perform echo >>$initrc "service su_daemon /$VENDOR_OVL/bin/su --daemon"
+		perform echo >>$initrc "    class main"
+		perform echo >>$initrc "    user root"
+		perform echo >>$initrc "    seclabel u:r:su_daemon:s0"
+		perform echo >>$initrc "    oneshot"
+
+		perform sed -i -e "s!\(on early-init\)!\1\n    restorecon /$VENDOR_OVL/bin/su!" $initrc
+	fi
+
+	perform rm -rf $SUPERUSER_DIR
+
+	ui_print "  Adjusting SE Linux policy for superuser"
+
+	local type
+	local source
+	local target
+	local policy=$(find_file $RAMDISK/sepolicy)
+
+	se_add_type ${policy} su_daemon
+	se_add_attr ${policy} su_daemon domain
+	se_add_attr ${policy} su_daemon mlstrustedsubject
+
+	se_add_type ${policy} su
+	se_add_attr ${policy} su domain
+	se_add_attr ${policy} su appdomain
+	se_add_attr ${policy} su netdomain
+	se_add_attr ${policy} su bluetoothdomain
+	se_add_attr ${policy} su mlstrustedsubject
+
+	se_add_type ${policy} su_device
+	se_add_attr ${policy} su_device domain
+	se_add_attr ${policy} su_device mlstrustedobject
+
+#	Transition to su_socket in dev
+	se_trans ${policy} su_daemon	device			file			su_device
+	se_trans ${policy} su_daemon	device			dir				su_device
+	se_allow ${policy} su_device	tmpfs			filesystem		associate
+	se_allow ${policy} su_daemon	tmpfs			filesystem		associate
+
+#	Allow start from init and transition to u:r:su_daemon:s0
+	se_allow ${policy} init			su_daemon		process			transition,rlimitinh,siginh,noatsecure
+	se_allow ${policy} su_daemon	rootfs			dir				open,getattr,read,ioctl
+	se_allow ${policy} su_daemon	rootfs			file			getattr,open,read,ioctl,lock
+	se_allow ${policy} su_daemon	rootfs			lnk_file		getattr
+
+	se_allow ${policy} su_daemon	qti_init_shell	fd				use
+	se_allow ${policy} su_daemon	init			dir				search
+	se_allow ${policy} su_daemon	init			file			open,read
+	se_allow ${policy} su_daemon	init			lnk_file		read
+
+	se_allow ${policy} su_daemon	proc			file			read,open,getattr
+	se_allow ${policy} su_daemon	devpts			dir				search
+	se_allow ${policy} su_daemon	devpts			chr_file		read,write,open,getattr
+
+	se_allow ${policy} su_daemon	system_file		file			entrypoint
+	se_allow ${policy} su_daemon	system_file		lnk_file		open,execute
+	se_allow ${policy} su_daemon	su_daemon		dir				search,read,create
+	se_allow ${policy} su_daemon	su_daemon		file			read,write,open
+	se_allow ${policy} su_daemon	su_daemon		lnk_file		read
+	se_allow ${policy} su_daemon	su_daemon	unix_dgram_socket	create,connect,write
+	se_allow ${policy} su_daemon	su_daemon	unix_stream_socket	create,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown,listen,accept
+	se_allow ${policy} su_daemon	untrusted_app_devpts chr_file	read,write,open,getattr
+	se_allow ${policy} su_daemon	su_daemon		capability		setuid,setgid
+
+	#Access to /data/data/me.phh.superuser/xxx
+	se_allow ${policy} su_daemon	app_data_file	dir				search,getattr,write,add_name
+	se_allow ${policy} su_daemon	app_data_file	file			getattr,read,open,lock
+
+	#FIXME: This shouldn't exist
+	#dac_override can be fixed by having pts_slave's fd forwarded over socket
+	#Instead of forwarding the name
+	se_allow ${policy} su_daemon	su_daemon		capability		dac_override,sys_admin
+	se_allow ${policy} su_daemon	su_daemon		process			fork,sigchld
+
+	#toolbox needed for log
+	se_allow ${policy} su_daemon	toolbox_exec	file			execute,read,open,execute_no_trans
+
+	#Create /dev/me.phh.superuser. Could be done by init
+	se_allow ${policy} su_daemon	device			dir				search,write,add_name
+	se_allow ${policy} su_daemon	su_device		dir				create,setattr,remove_name,add_name
+	se_allow ${policy} su_daemon	su_device		sock_file		create,unlink
+
+	#se_allow ${policy}  su daemon to start su apk
+	se_allow ${policy} su_daemon	zygote_exec		file			execute,read,open,execute_no_trans
+	se_allow ${policy} su_daemon	zygote_exec		lnk_file		read,getattr
+
+	#Send request to APK
+	se_allow ${policy} su_daemon	su_device		dir				search,write,add_name
+
+	#se_allow ${policy}  su_daemon to switch to su or su_sensitive
+	se_allow ${policy} su_daemon	su_daemon		process			setexec,setfscreate
+
+	#se_allow ${policy}  su_daemon to execute a shell (every commands are supposed to go through a shell)
+	se_allow ${policy} su_daemon	shell_exec		file			execute,read,open
+	se_allow ${policy} su_daemon	su_daemon		capability		chown
+	se_allow ${policy} su_daemon	su				process			transition,siginh,rlimitinh,noatsecure
+
+	#Used for ViPER|Audio
+	#This is L3 because mediaserver already has { allow mediaserver self:process execmem; } which is much more dangerous
+	se_allow ${policy} mediaserver		mediaserver_tmpfs	file	execute
+
+	for source in adbd shell untrusted_app platform_app system_app su; do
+		#All domain-s already have read access to rootfs
+		se_allow ${policy} $source		rootfs		file			execute_no_trans,execute
+
+		se_allow ${policy} $source		rootfs		dir				open,getattr,read,search,ioctl
+		se_allow ${policy} $source		rootfs		file			getattr,open,read,ioctl,lock
+		se_allow ${policy} $source		rootfs		lnk_file		read,getattr
+		
+		se_allow ${policy} $source		su_daemon	unix_stream_socket	connectto
+		se_allow ${policy} $source		su_device	dir				search,read
+		se_allow ${policy} $source		su_device	sock_file		read,write
+		se_allow ${policy} su_daemon	$source		fd				use
+		se_allow ${policy} su_daemon	$source		fifo_file		read,write,getattr,ioctl
+
+		#Read /proc/callerpid/cmdline in from_init, drop?
+		#Requiring sys_ptrace sucks
+		se_allow ${policy} su_daemon	$source		dir				search
+		se_allow ${policy} su_daemon	$source		file			read,open
+		se_allow ${policy} su_daemon	$source		lnk_file		read
+		se_allow ${policy} su_daemon	su_daemon	capability		sys_ptrace
+
+		#TODO: Split in for su/su_sensitive/su_cts
+		se_allow ${policy} su			$source		fd				use
+		se_allow ${policy} su			$source		fifo_file		read,write
+	done
+
+	se_allow ${policy} qti_init_shell	su_daemon	unix_stream_socket	connectto
+
+	#This is the vital minimum for su to open a uid 0 shell
+	#Communications with su_daemon
+	se_allow ${policy} su			su_daemon		fd				use
+	se_allow ${policy} su			su_daemon		process			sigchld
+	se_allow ${policy} su			su_daemon	unix_stream_socket read,write
+
+	se_allow ${policy} servicemanager	su			dir				search,read
+	se_allow ${policy} servicemanager	su			file			open,read
+	se_allow ${policy} servicemanager	su			process			getattr
+	se_allow ${policy} servicemanager	su			binder			transfer
+	se_allow ${policy} system_server	su			binder			call
+
+	#Enable the app to write to logs
+	se_allow ${policy} su			su				dir				search,read
+	se_allow ${policy} su			su				file			read
+	se_allow ${policy} su			su				lnk_file		read
+	se_allow ${policy} su			su			unix_dgram_socket	create,connect,write
+	se_allow ${policy} su			toolbox_exec	file			read,entrypoint
+	se_allow ${policy} su			devpts			chr_file		read,write,open
+
+#	Controlled access to tmpfs
+	se_add_type ${policy} su_tmpfs
+	se_add_attr ${policy} su_tmpfs file_type
+	se_trans    ${policy} su tmpfs file	su_tmpfs
+	se_allow    ${policy} su su_tmpfs file write,read,execute
+
+	se_allow ${policy} system_server	su			binder			call,transfer
+
+	#ES Explorer opens a sokcet
+	se_allow ${policy} untrusted_app	su		unix_stream_socket connectto,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
+
+	se_allow ${policy} su	sysfs					dir				ioctl,getattr,read,lock,search,open
+	se_allow ${policy} su	sysfs					file			ioctl,getattr,read,lock,open
+	se_allow ${policy} su	sysfs					lnk_file		ioctl,getattr,read,lock,open
+	se_allow ${policy} su	proc_net				file			getattr,read,open
+
+	se_allow ${policy} su	selinuxfs		filesystem		getattr
+	se_allow ${policy} su	qti_init_shell	fd				use
+
+	for target in default_prop log_tag_prop log_prop logd_prop log_tag_prop dalvik_prop config_prop vold_prop system_prop; do
+		se_allow ${policy} su		${target}		file			open,getattr,read
+	done
+
+	se_allow ${policy} su			device			dir				getattr
+	se_allow ${policy} su			su				process			sigkill
+	se_allow ${policy} su			proc			file			read,open,getattr
+	se_allow ${policy} su			persist_debug_prop	file		read
+
+	for target in shell_exec zygote_exec dalvikcache_data_file rootfs system_file; do
+		se_allow ${policy} su ${target}				 file			getattr,open,read,ioctl,lock,getattr,execute,execute_no_trans,entrypoint
+	done
+	for target in dalvikcache_data_file rootfs system_file; do
+		se_allow ${policy} su ${target}				lnk_file		read,getattr
+		se_allow ${policy} su ${target}				dir				open,getattr,read,search,ioctl,write,remove_name,add_name
+	done
+	se_allow ${policy} su			toolbox_exec	file			getattr,open,read,ioctl,lock,getattr,execute,execute_no_trans entrypoint
+	se_allow ${policy} su			devpts			chr_file		getattr,ioctl
+	se_allow ${policy} su			servicemanager	binder			call,transfer
+	se_allow ${policy} su			system_server	binder			call,transfer
+	se_allow ${policy} su	activity_service		service_manager	find
+	se_allow ${policy} su	untrusted_app_devpts	chr_file		read,write,open,getattr,ioctl
+
+	#Give full access to itself
+	se_allow ${policy} su				su			file			open,append,write,getattr,open,read,ioctl,lock,getattr,execute,execute_no_trans
+	se_allow ${policy} su				su		unix_stream_socket	create,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown,listen,accept
+	se_allow ${policy} su				su			process			sigchld,setpgid,setsched,fork,signal,execmem,getsched
+	se_allow ${policy} su				su			fifo_file		getattr,open,read,ioctl,lock,open,append,write
+
+	#Any domain is allowed to send su "sigchld"
+	#TODO: Have sepolicy-inject handle that
+	#allow "=domain" su process "sigchld"
+	se_allow ${policy} surfaceflinger	su			process			sigchld
+
+	#dmesg
+	se_allow ${policy} su			kernel			system			syslog_read,syslog_mod
+	se_allow ${policy} su			su				capability2		syslog
+
+	#logcat
+	se_allow ${policy} su			logdr_socket	sock_file		write
+	se_allow ${policy} su			logd		unix_stream_socket	connectto,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
+	se_allow ${policy} su			logcat_exec		file			getattr,execute
+
+	#Access to /data/local/tmp/
+	se_allow ${policy} su		shell_data_file		dir				create,open,getattr,read,search,ioctl,search,write,add_name,remove_name
+	se_allow ${policy} su		shell_data_file		file			open,append,write,getattr,open,read,ioctl,lock,create,setattr,unlink,rename,execute,execute_no_trans
+	se_allow ${policy} su		shell_data_file		lnk_file		read,getattr
+
+	se_allow ${policy} su		fuse				lnk_file		read,getattr
+	se_allow ${policy} su		mnt_user_file		file			getattr,open,read,ioctl,lock
+
+
+	#strace self
+	se_allow ${policy} su		su				process			ptrace
+	se_allow ${policy} su		su				netlink_route_socket	create,setopt,bind,getattr,write,nlmsg_read,read
+
+	se_allow ${policy} su		net_data_file	dir				open,getattr,read,search,ioctl
+	se_allow ${policy} su		net_data_file	file			getattr,open,read,ioctl,lock
+	se_allow ${policy} su		net_data_file	lnk_file		read,getattr
+
+	se_allow ${policy} su		untrusted_app	fifo_file		ioctl,getattr
+	se_allow ${policy} su		app_data_file	dir				search,getattr
+	se_allow ${policy} su		app_data_file	file			getattr,execute,read,open,execute_no_trans
+
+	se_allow ${policy} su		su				unix_stream_socket	create,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown,listen,accept
+	se_allow ${policy} su		su				rawip_socket		create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
+	se_allow ${policy} su		su				udp_socket			create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
+	se_allow ${policy} su		su				tcp_socket			create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
+	se_allow ${policy} su		su			netlink_route_socket	nlmsg_write
+
+	[ $su_permissive -eq 1 ] && se_permissive ${policy} su
 }
 
 add_drmfix() {
@@ -703,10 +999,10 @@ add_xposed()
 	add_vendor_overlay
 
 	local policy=$(find_file $RAMDISK/sepolicy)
-	add_policy $policy dex2oat	apk_tmp_file	dir		 search
+	se_allow ${policy} dex2oat	apk_tmp_file	dir		 search
 #	Avoid the LD_PRELOAD is removed on transition from installd to dex2oat
-	add_policy $policy installd			dex2oat			process	 noatsecure
-	add_policy $policy untrusted_app	dex2oat			process	 noatsecure
+	se_allow ${policy} installd			dex2oat			process	 noatsecure
+	se_allow ${policy} untrusted_app	dex2oat			process	 noatsecure
 	
 	perform mkdir -p $RAMDISK/$VENDOR_OVL/framework
 	perform cp  $XPOSED_DIR/system/framework/XposedBridge.jar		$RAMDISK/$VENDOR_OVL/framework/XposedBridge.jar@0644
@@ -759,20 +1055,21 @@ add_bb()
 	perform touch $RAMDISK/$VENDOR_OVL/bin/busybox_keep@0644
 }
 
+# Allow some additional DENYs which are spamming thelog
 sepolicy_fixes()
 {
 	local policy=$(find_file $RAMDISK/sepolicy)
 	local source
 
-	add_policy $policy ipacm			ipacm-diag		unix_dgram_socket	sendto
-	add_policy $policy system_server	logd			dir					search
-	add_policy $policy system_server	logd			file 		  	 	read,open
-	add_policy $policy vold				logd			dir					search
-	add_policy $policy vold				logd			file 		  	 	read,open
-	for source in rild qcomsysd cnd netmgrd ims cnd thermal-engine mm-pp-daemon time_daemon dpmd ipacm-diag audioserver location bluetooth system_server imsqmidaemon dataservice_app; do
-		add_policy $policy $source		diag_device		chr_file			write,read,open,ioctl
+	se_allow ${policy} ipacm			ipacm-diag		unix_dgram_socket	sendto
+	se_allow ${policy} system_server	logd			dir					search
+	se_allow ${policy} system_server	logd			file 		  	 	read,open
+	se_allow ${policy} vold				logd			dir					search
+	se_allow ${policy} vold				logd			file 		  	 	read,open
+	for source in rild qcomsysd cnd netmgrd ims cnd thermal-engine mm-pp-daemon time_daemon dpmd ipacm-diag audioserver location bluetooth system_server dataservice_app; do
+		se_allow ${policy} $source		diag_device		chr_file			write,read,open,ioctl
 	done
-	add_policy $policy toolbox			unlabeled		dir					getattr,open,read,write
+	se_allow ${policy} toolbox			unlabeled		dir					getattr,open,read,write
 }
 
 cleanup() {
@@ -825,6 +1122,7 @@ disable_dmverity
 
 add_twrp
 add_supersu
+[ -z "$SUPER_INSTALLED" ] && add_superuser
 add_xposed
 
 [ "$VENDOR" == "somc" ] && add_drmfix

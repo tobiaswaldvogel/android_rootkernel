@@ -30,6 +30,8 @@ on init
     mkdir /sideload
     mkdir /tmp
     symlink /system/vendor vendor
+	rm /sdcard
+    symlink /data/media/0 /sdcard
     mount tmpfs tmpfs /tmp
 
     chown root shell /tmp
