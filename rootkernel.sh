@@ -1,5 +1,5 @@
 #!/bin/sh
-VERSION=V5.20
+VERSION=V5.21
 SOURCE=$1
 TARGET=$2
 
@@ -21,6 +21,7 @@ else
 fi
 
 BOOTIMG=./bootimg
+SEINJECT_TRACE_LEVEL=1
 BB=./busybox
 
 ask() {
@@ -62,23 +63,23 @@ ui_print() {
 }
 
 se_allow() {
-	"$BOOTIMG" seinject -s $2 -t $3 -c $4 -p $5 -P $1 -o $1
+	"$BOOTIMG" seinject -w ${SEINJECT_TRACE_LEVEL} -s $2 -t $3 -c $4 -p $5 -P $1 -o $1
 }
 
 se_trans() {
-	"$BOOTIMG" seinject -s $2 -t $5 -c $4 -f $3 -P $1 -o $1
+	"$BOOTIMG" seinject -w ${SEINJECT_TRACE_LEVEL} -s $2 -t $5 -c $4 -f $3 -P $1 -o $1
 }
 
 se_add_type() {
-	"$BOOTIMG" seinject -z $2 -P $1 -o $1
+	"$BOOTIMG" seinject -w ${SEINJECT_TRACE_LEVEL} -z $2 -P $1 -o $1
 }
 
 se_permissive() {
-	"$BOOTIMG" seinject -Z $2 -P $1 -o $1
+	"$BOOTIMG" seinject -w ${SEINJECT_TRACE_LEVEL} -Z $2 -P $1 -o $1
 }
 
 se_add_attr() {
-	"$BOOTIMG" seinject -s $2 -a $3 -P $1 -o $1
+	"$BOOTIMG" seinject -w ${SEINJECT_TRACE_LEVEL} -s $2 -a $3 -P $1 -o $1
 }
 
 find_file() {
@@ -390,7 +391,7 @@ disable_sonyric() {
 add_file_context() {
 	local wildcard=""
 	local contexts=$(find_file $RAMDISK/file_contexts)
-	[ ! -z "$conexts" ] && {
+	if [ ! -z "$contexts" ]; then
 		perform grep -q -F "$1" $contexts
 		[ $? -eq 0 ] && return
 
@@ -398,11 +399,11 @@ add_file_context() {
 		perform echo -e >>${contexts} ""
 		perform echo -e >>${contexts} "##########################"
 		perform echo -e >>${contexts} "$1${wildcard}\t\tu:object_r:$2:s0"
-	} || {
+	else
 		contexts=$(find_file $RAMDISK/file_contexts.bin)
 		[ ! -z $3 ] && wildcard=-w
 		$BOOTIMG fctxinject -q -i ${contexts} ${wildcard} -c u:object_r:$2:s0 -p $1 -o $contexts
-	}
+	fi
 
 	local policy=$(find_file $RAMDISK/sepolicy)
 	se_allow ${policy} init rootfs dir      relabelfrom
@@ -735,7 +736,7 @@ add_superuser()
 
 #	Allow start from init and transition to u:r:su_daemon:s0
 	se_allow ${policy} init			su_daemon		process			transition,rlimitinh,siginh,noatsecure
-	se_allow ${policy} su_daemon	rootfs			dir				open,getattr,read,ioctl
+	se_allow ${policy} su_daemon	rootfs			dir				open,read,ioctl
 	se_allow ${policy} su_daemon	rootfs			file			getattr,open,read,ioctl,lock
 	se_allow ${policy} su_daemon	rootfs			lnk_file		getattr
 
@@ -745,7 +746,6 @@ add_superuser()
 	se_allow ${policy} su_daemon	init			lnk_file		read
 
 	se_allow ${policy} su_daemon	proc			file			read,open,getattr
-	se_allow ${policy} su_daemon	devpts			dir				search
 	se_allow ${policy} su_daemon	devpts			chr_file		read,write,open,getattr
 
 	se_allow ${policy} su_daemon	system_file		file			entrypoint
@@ -772,7 +772,7 @@ add_superuser()
 	se_allow ${policy} su_daemon	toolbox_exec	file			execute,read,open,execute_no_trans
 
 	#Create /dev/me.phh.superuser. Could be done by init
-	se_allow ${policy} su_daemon	device			dir				search,write,add_name
+	se_allow ${policy} su_daemon	device			dir				write,add_name
 	se_allow ${policy} su_daemon	su_device		dir				create,setattr,remove_name,add_name
 	se_allow ${policy} su_daemon	su_device		sock_file		create,unlink
 
@@ -781,7 +781,7 @@ add_superuser()
 	se_allow ${policy} su_daemon	zygote_exec		lnk_file		read,getattr
 
 	#Send request to APK
-	se_allow ${policy} su_daemon	su_device		dir				search,write,add_name
+	se_allow ${policy} su_daemon	su_device		dir				search,write
 
 	#se_allow ${policy}  su_daemon to switch to su or su_sensitive
 	se_allow ${policy} su_daemon	su_daemon		process			setexec,setfscreate
@@ -794,6 +794,8 @@ add_superuser()
 	#Used for ViPER|Audio
 	#This is L3 because mediaserver already has { allow mediaserver self:process execmem; } which is much more dangerous
 	se_allow ${policy} mediaserver		mediaserver_tmpfs	file	execute
+
+	se_allow ${policy} su_daemon	su_daemon	capability		sys_ptrace
 
 	for source in adbd shell untrusted_app platform_app system_app su; do
 		#All domain-s already have read access to rootfs
@@ -814,7 +816,6 @@ add_superuser()
 		se_allow ${policy} su_daemon	$source		dir				search
 		se_allow ${policy} su_daemon	$source		file			read,open
 		se_allow ${policy} su_daemon	$source		lnk_file		read
-		se_allow ${policy} su_daemon	su_daemon	capability		sys_ptrace
 
 		#TODO: Split in for su/su_sensitive/su_cts
 		se_allow ${policy} su			$source		fd				use
@@ -829,19 +830,15 @@ add_superuser()
 	se_allow ${policy} su			su_daemon		process			sigchld
 	se_allow ${policy} su			su_daemon	unix_stream_socket read,write
 
-	se_allow ${policy} servicemanager	su			dir				search,read
-	se_allow ${policy} servicemanager	su			file			open,read
-	se_allow ${policy} servicemanager	su			process			getattr
-	se_allow ${policy} servicemanager	su			binder			transfer
-	se_allow ${policy} system_server	su			binder			call
+	se_allow ${policy} servicemanager	su			dir				read
 
 	#Enable the app to write to logs
 	se_allow ${policy} su			su				dir				search,read
 	se_allow ${policy} su			su				file			read
 	se_allow ${policy} su			su				lnk_file		read
 	se_allow ${policy} su			su			unix_dgram_socket	create,connect,write
-	se_allow ${policy} su			toolbox_exec	file			read,entrypoint
-	se_allow ${policy} su			devpts			chr_file		read,write,open
+	se_allow ${policy} su			toolbox_exec	file			entrypoint
+	se_allow ${policy} su			devpts			chr_file		open
 
 #	Controlled access to tmpfs
 	se_add_type ${policy} su_tmpfs
@@ -852,44 +849,33 @@ add_superuser()
 	se_allow ${policy} system_server	su			binder			call,transfer
 
 	#ES Explorer opens a sokcet
-	se_allow ${policy} untrusted_app	su		unix_stream_socket connectto,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
+	se_allow ${policy} untrusted_app	su		unix_stream_socket connectto,ioctl,setattr,lock,append,bind,connect,setopt
 
-	se_allow ${policy} su	sysfs					dir				ioctl,getattr,read,lock,search,open
+	se_allow ${policy} su	sysfs					dir				ioctl,read,lock,open
 	se_allow ${policy} su	sysfs					file			ioctl,getattr,read,lock,open
-	se_allow ${policy} su	sysfs					lnk_file		ioctl,getattr,read,lock,open
+	se_allow ${policy} su	sysfs					lnk_file		ioctl,getattr,lock,open
 	se_allow ${policy} su	proc_net				file			getattr,read,open
 
-	se_allow ${policy} su	selinuxfs		filesystem		getattr
 	se_allow ${policy} su	qti_init_shell	fd				use
 
-	for target in default_prop log_tag_prop log_prop logd_prop log_tag_prop dalvik_prop config_prop vold_prop system_prop; do
-		se_allow ${policy} su		${target}		file			open,getattr,read
-	done
-
-	se_allow ${policy} su			device			dir				getattr
 	se_allow ${policy} su			su				process			sigkill
 	se_allow ${policy} su			proc			file			read,open,getattr
-	se_allow ${policy} su			persist_debug_prop	file		read
 
-	for target in shell_exec zygote_exec dalvikcache_data_file rootfs system_file; do
-		se_allow ${policy} su ${target}				 file			getattr,open,read,ioctl,lock,getattr,execute,execute_no_trans,entrypoint
+	for target in shell_exec zygote_exec dalvikcache_data_file rootfs system_file toolbox_exec; do
+		se_allow ${policy} su ${target}				 file			entrypoint
 	done
+
 	for target in dalvikcache_data_file rootfs system_file; do
-		se_allow ${policy} su ${target}				lnk_file		read,getattr
-		se_allow ${policy} su ${target}				dir				open,getattr,read,search,ioctl,write,remove_name,add_name
+		se_allow ${policy} su ${target}				dir				open,read,ioctl,write,remove_name,add_name
 	done
-	se_allow ${policy} su			toolbox_exec	file			getattr,open,read,ioctl,lock,getattr,execute,execute_no_trans entrypoint
-	se_allow ${policy} su			devpts			chr_file		getattr,ioctl
-	se_allow ${policy} su			servicemanager	binder			call,transfer
-	se_allow ${policy} su			system_server	binder			call,transfer
+
 	se_allow ${policy} su	activity_service		service_manager	find
 	se_allow ${policy} su	untrusted_app_devpts	chr_file		read,write,open,getattr,ioctl
 
 	#Give full access to itself
-	se_allow ${policy} su				su			file			open,append,write,getattr,open,read,ioctl,lock,getattr,execute,execute_no_trans
-	se_allow ${policy} su				su		unix_stream_socket	create,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown,listen,accept
+	se_allow ${policy} su				su			file			append,write,getattr,open,ioctl,lock,execute,execute_no_trans
+	se_allow ${policy} su				su		unix_stream_socket	create,ioctl,setattr,lock,append,bind,connect,setopt,listen,accept
 	se_allow ${policy} su				su			process			sigchld,setpgid,setsched,fork,signal,execmem,getsched
-	se_allow ${policy} su				su			fifo_file		getattr,open,read,ioctl,lock,open,append,write
 
 	#Any domain is allowed to send su "sigchld"
 	#TODO: Have sepolicy-inject handle that
@@ -901,13 +887,11 @@ add_superuser()
 	se_allow ${policy} su			su				capability2		syslog
 
 	#logcat
-	se_allow ${policy} su			logdr_socket	sock_file		write
-	se_allow ${policy} su			logd		unix_stream_socket	connectto,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
-	se_allow ${policy} su			logcat_exec		file			getattr,execute
+	se_allow ${policy} su			logd		unix_stream_socket	ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
 
 	#Access to /data/local/tmp/
-	se_allow ${policy} su		shell_data_file		dir				create,open,getattr,read,search,ioctl,search,write,add_name,remove_name
-	se_allow ${policy} su		shell_data_file		file			open,append,write,getattr,open,read,ioctl,lock,create,setattr,unlink,rename,execute,execute_no_trans
+	se_allow ${policy} su		shell_data_file		dir				create,open,getattr,read,search,ioctl,write,add_name,remove_name
+	se_allow ${policy} su		shell_data_file		file			append,open,read,ioctl,lock,create,setattr,unlink,rename,execute,execute_no_trans
 	se_allow ${policy} su		shell_data_file		lnk_file		read,getattr
 
 	se_allow ${policy} su		fuse				lnk_file		read,getattr
@@ -922,11 +906,10 @@ add_superuser()
 	se_allow ${policy} su		net_data_file	file			getattr,open,read,ioctl,lock
 	se_allow ${policy} su		net_data_file	lnk_file		read,getattr
 
-	se_allow ${policy} su		untrusted_app	fifo_file		ioctl,getattr
 	se_allow ${policy} su		app_data_file	dir				search,getattr
 	se_allow ${policy} su		app_data_file	file			getattr,execute,read,open,execute_no_trans
 
-	se_allow ${policy} su		su				unix_stream_socket	create,ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown,listen,accept
+	
 	se_allow ${policy} su		su				rawip_socket		create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
 	se_allow ${policy} su		su				udp_socket			create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
 	se_allow ${policy} su		su				tcp_socket			create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
@@ -1053,6 +1036,9 @@ add_bb()
 
 	add_vendor_overlay
 	perform touch $RAMDISK/$VENDOR_OVL/bin/busybox_keep@0644
+
+	local policy=$(find_file $RAMDISK/sepolicy)
+	se_allow ${policy} init rootfs lnk_file rename
 }
 
 # Allow some additional DENYs which are spamming thelog
