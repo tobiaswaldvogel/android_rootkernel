@@ -1,5 +1,5 @@
 #!/bin/sh
-VERSION=V5.21
+VERSION=V5.22
 SOURCE=$1
 TARGET=$2
 

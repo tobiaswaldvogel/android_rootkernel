@@ -17,7 +17,6 @@ replicate_dir() {
 
 		if [ ! -e $2/${node} ]; then
 			if [ -d ${path} ]; then
-				subdir=${path}
 				${BB} mkdir -m 0755 -p $2/${node}
 			else
 				local target=${path}
@@ -30,7 +29,8 @@ replicate_dir() {
 			fi
 		fi
 
-		if [ ! -z ${subdir} ]; then
+		if [ -d ${path} ]; then
+			subdir=${path}
 			[ -d $2/${node}/bind_${node} ] && subdir=$2/${node}/bind_${node}
 			replicate_dir ${subdir} $2/${node} $3 $4
 		fi
