@@ -577,12 +577,12 @@ add_twrp()
 }
 
 add_kcal_module() {
-	#	Install kcal kernel module if available
-	local kcal
+#	Install kcal kernel module if available
+	local file
 	local KCAL_MODULE
 	local install
 
-	for kcal in $TOOLS/kcal/$KERNEL_VERSION/*; do KCAL_MODULE=${kcal}; done
+	for file in $TOOLS/kcal/$KERNEL_VERSION/*; do KCAL_MODULE=${file}; done
 	[ ! -f ${KCAL_MODULE} ] && return
 
 	ask "- Install kcal kernel module?" 1 install
@@ -592,7 +592,7 @@ add_kcal_module() {
 
 	local mod_dir=$RAMDISK/$VENDOR_OVL/lib/modules
 	perform mkdir -p ${mod_dir}
-	perform cp ${kcal} ${mod_dir}/
+	perform cp ${KCAL_MODULE} ${mod_dir}/
 
 #	Due to MLS we need a new type for sysfs and grant access for the app
 	local policy=$(find_file $RAMDISK/sepolicy)
@@ -604,7 +604,9 @@ add_kcal_module() {
 	se_allow ${policy} untrusted_app	sysfs_kcal	dir			search
 	se_allow ${policy} untrusted_app	sysfs_kcal	file		open,read,getattr
 	add_file_context "/sys/devices/platform/kcal_ctrl.0" "sysfs_kcal" 1
-	perform echo -e >>$initrc "    restorecon_recursive /sys/devices/platform/kcal_ctrl.0"
+
+	local initrc=$(find_file $RAMDISK/init.rc)
+	perform sed -i -e "s!\(.*\)\(restorecon_recursive /$VENDOR_OVL\)\$!\1\2\n\1restorecon_recursive /sys/devices/platform/kcal_ctrl.0!" ${initrc}
 }
 
 add_supersu()
