@@ -3,7 +3,7 @@
 /SuperSU*
 /superuser*
 /xposed*
-/boot.img
+/boot*.img
 /ramdisk*
 /newrd.gz
 /rd.gz

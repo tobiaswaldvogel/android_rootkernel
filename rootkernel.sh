@@ -1,5 +1,5 @@
 #!/bin/sh
-VERSION=V5.22
+VERSION=V5.23
 SOURCE=$1
 TARGET=$2
 
@@ -395,7 +395,7 @@ add_file_context() {
 		perform grep -q -F "$1" $contexts
 		[ $? -eq 0 ] && return
 
-		[ !-z $3 ] && wildcard="(/.*)?"
+		[ ! -z "$3" ] && wildcard="(/.*)?"
 		perform echo -e >>${contexts} ""
 		perform echo -e >>${contexts} "##########################"
 		perform echo -e >>${contexts} "$1${wildcard}\t\tu:object_r:$2:s0"
@@ -574,6 +574,37 @@ add_twrp()
 	ui_print "  Compressing TWRP image"
 	"$BOOTIMG" mkinitfs $TWRP_WORK | $XZ -c >$RAMDISK/$VENDOR_OVL/twrp.xz
 	perform rm -rf $TWRP_WORK
+}
+
+add_kcal_module() {
+	#	Install kcal kernel module if available
+	local kcal
+	local KCAL_MODULE
+	local install
+
+	for kcal in $TOOLS/kcal/$KERNEL_VERSION/*; do KCAL_MODULE=${kcal}; done
+	[ ! -f ${KCAL_MODULE} ] && return
+
+	ask "- Install kcal kernel module?" 1 install
+	[ ${install} -ne 1 ] && return
+
+	add_vendor_overlay
+
+	local mod_dir=$RAMDISK/$VENDOR_OVL/lib/modules
+	perform mkdir -p ${mod_dir}
+	perform cp ${kcal} ${mod_dir}/
+
+#	Due to MLS we need a new type for sysfs and grant access for the app
+	local policy=$(find_file $RAMDISK/sepolicy)
+	se_add_type ${policy} sysfs_kcal
+	se_add_attr ${policy} sysfs_kcal fs_type
+	se_add_attr ${policy} sysfs_kcal sysfs_type
+	se_add_attr ${policy} sysfs_kcal mlstrustedobject
+	se_allow ${policy} sysfs_kcal		sysfs		filesystem	associate
+	se_allow ${policy} untrusted_app	sysfs_kcal	dir			search
+	se_allow ${policy} untrusted_app	sysfs_kcal	file		open,read,getattr
+	add_file_context "/sys/devices/platform/kcal_ctrl.0" "sysfs_kcal" 1
+	perform echo -e >>$initrc "    restorecon_recursive /sys/devices/platform/kcal_ctrl.0"
 }
 
 add_supersu()
@@ -831,6 +862,7 @@ add_superuser()
 	se_allow ${policy} su			su_daemon	unix_stream_socket read,write
 
 	se_allow ${policy} servicemanager	su			dir				read
+	se_allow ${policy} servicemanager	su			binder			transfer
 
 	#Enable the app to write to logs
 	se_allow ${policy} su			su				dir				search,read
@@ -910,6 +942,7 @@ add_superuser()
 	se_allow ${policy} su		app_data_file	file			getattr,execute,read,open,execute_no_trans
 
 	
+	se_allow ${policy} su		su			unix_dgram_socket		create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
 	se_allow ${policy} su		su				rawip_socket		create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
 	se_allow ${policy} su		su				udp_socket			create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
 	se_allow ${policy} su		su				tcp_socket			create ioctl,read,getattr,write,setattr,lock,append,bind,connect,getopt,setopt,shutdown
@@ -938,6 +971,7 @@ add_drmfix() {
 	fi
 
 	add_vendor_overlay
+
 	local initrc=$(find_file $RAMDISK/init.rc)
 	perform cp -a $TOOLS/libdrmfix32.so $RAMDISK/$VENDOR_OVL/lib/libdrmfix.so@0644
 	perform sed -i -e "s!\(on early-init\)!\1\n    restorecon /$VENDOR_OVL/lib/libdrmfix.so!" $initrc
@@ -945,6 +979,10 @@ add_drmfix() {
 		perform cp -a $TOOLS/libdrmfix64.so $RAMDISK/$VENDOR_OVL/lib64/libdrmfix.so@0644
 		perform sed -i -e "s!\(on early-init\)!\1\n    restorecon /$VENDOR_OVL/lib64/libdrmfix.so!" $initrc
 	}
+
+	local policy=$(find_file $RAMDISK/sepolicy)
+	se_allow ${policy} init system_file file relabelto
+
 	add_preload libdrmfix.so
 }
 
@@ -1107,6 +1145,7 @@ disable_dmverity
 [ "$VENDOR" == "somc" ] && disable_sonyric
 
 add_twrp
+add_kcal_module
 add_supersu
 [ -z "$SUPER_INSTALLED" ] && add_superuser
 add_xposed
